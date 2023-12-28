@@ -1,0 +1,11 @@
+version: '3.9'
+
+services:
+
+  factorio-connector:
+    build: .
+    environment:
+      RCON_ADDR: "${RCON_ADDR:-127.0.0.1}"
+      RCON_PORT: "${RCON_PORT:-27015}"
+      RCON_PASS: "${RCON_PASS:-123}"
+      DISCORD_BOT_TOKEN: "${DISCORD_BOT_TOKEN:-123}"
