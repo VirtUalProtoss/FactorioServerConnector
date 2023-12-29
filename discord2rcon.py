@@ -32,7 +32,7 @@ class DClient(discord.Client):
         await self.execute_rcon(f"/whitelist add {username}")
 
     async def remove_user_from_whitelist(self, username):
-        del self.white_list[username]
+        self.white_list.remove(username)
         await self.execute_rcon(f"/whitelist remove {username}")
 
     async def update_server_whitelist(self):
