@@ -58,16 +58,17 @@ class DClient(discord.Client):
         else:
             await self.execute_rcon(f"/whitelist disable")
         self.loop.create_task(self.get_whitelist_enabled())
-    
-    async def get_bot_enabled(self):
-        await asyncio.sleep(self.whitelist_polling_interval)
-        data = await self.execute_rcon("/bot-state")
-        print(f"get_bot_enabled: {data}")
-        if data == "on":
-            self.bot_enabled = True
-        else:
-            self.bot_enabled = False
-        self.loop.create_task(self.get_bot_enabled())
+
+    # пока закомментил, но вдруг понадобится
+    # async def get_bot_enabled(self):
+    #     await asyncio.sleep(self.whitelist_polling_interval)
+    #     data = await self.execute_rcon("/bot-state")
+    #     print(f"get_bot_enabled: {data}")
+    #     if data == "on":
+    #         self.bot_enabled = True
+    #     else:
+    #         self.bot_enabled = False
+    #     self.loop.create_task(self.get_bot_enabled())
 
     async def execute_rcon(self, command, retry=3):
         try:
@@ -84,67 +85,80 @@ class DClient(discord.Client):
         self.rcon_client = factorio_rcon.RCONClient(RCON_ADDR, int(RCON_PORT), RCON_PASS)
         self.user_map = load_data(USER_MAP_FILE)
         self.loop.create_task(self.get_whitelist_enabled())
-        self.loop.create_task(self.get_bot_enabled())
+        # self.loop.create_task(self.get_bot_enabled())
         print(f'We have logged in as {self.user}')
 
     async def on_message(self, message):
-        # print(message)
-        # if not self.bot_enabled:
-        #     return
         is_admin = await self.is_factorio_admin(message.author)
         author = message.author.name
-        if message.channel.name == DISCORD_MAP_CHANNEL:
-            if is_admin:
-                if message.content.startswith("/c"):
-                    responce = await self.execute_rcon(message.content[3:])
-                    if responce:
-                        await message.channel.send(responce)
-                if message.content.startswith(".wl_polling"):
-                    if message.content == ".wl_polling":
-                        await message.channel.send(f"{self.whitelist_polling_interval}")
-                    else:
-                        try:
-                            self.set_polling_interval(int(message.content.split(" ")[-1]))
-                            await message.channel.send(f"whitelist_polling_interval setted to {self.whitelist_polling_interval}")
-                        except:
-                            await message.channel.send(f"Bad value {message.content}")
+        if message.channel.name != DISCORD_MAP_CHANNEL:
+            return
 
-            if message.content.startswith(".whitelist"):
+        if author == DISCORD_BOT_NAME:
+            return
+
+        # команды, передаваемые на сервер факторио,
+        # работают только для пользователей дискорда с ролью админа сервера факторио
+        if message.content.startswith("/c") and is_admin:
+            responce = await self.execute_rcon(message.content[3:])
+            if responce:
+                await message.channel.send(responce)
+
+        # команды бота, часть команд (конфигурационные)
+        # работают только у пользователей дискорда с ролью админа сервера факторио
+        elif message.content.startswith("."):
+            cmd = message.content[1:]
+            if cmd.startswith("wl_polling") and is_admin:
+                if message.content == "wl_polling":
+                    await message.channel.send(f"{self.whitelist_polling_interval}")
+                else:
+                    try:
+                        self.set_polling_interval(int(message.content.split(" ")[-1]))
+                        await message.channel.send(
+                            f"whitelist_polling_interval setted to {self.whitelist_polling_interval}")
+                    except:
+                        await message.channel.send(f"Bad value {message.content}")
+
+            if cmd == "whitelist":
                 self.whitelist = await self.execute_rcon("/whitelist get")
                 await message.channel.send(self.whitelist)
 
-            elif message.content.startswith(".user_map"):
+            if cmd == "user_map":
                 await message.channel.send(self.user_map)
 
+        # код для маппинга юзера дискорда с юзером в факторио
+        else:
+            user_exists = ""
+            for user in self.user_map:
+                if self.user_map[user] == message.content:
+                    user_exists = user
+            if user_exists:
+                await message.channel.send(
+                    f"Factorio user {message.content} already mapped to Discord user {user_exists}")
             else:
-                if author != DISCORD_BOT_NAME and not message.content.startswith(".") and not message.content.startswith("/c"):
-                    user_exists = ""
-                    for user in self.user_map:
-                        if self.user_map[user] == message.content:
-                            user_exists = user
-                    if user_exists:
-                        await message.channel.send(f"Factorio user {message.content} already mapped to Discord user {user_exists}")
-                    else:
-                        self.user_map.update({
-                            author: message.content
-                        })
-                        with open(USER_MAP_FILE, "w") as ufile:
-                            ufile.write(json.dumps(self.user_map))
-                        await message.channel.send(f"Discord User {author} mapped to {message.content}")
+                self.user_map.update({
+                    author: message.content
+                })
+                with open(USER_MAP_FILE, "w") as ufile:
+                    ufile.write(json.dumps(self.user_map))
+                await message.channel.send(f"Discord User {author} mapped to {message.content}")
 
     async def on_voice_state_update(self, member, before, after):
         if not self.bot_enabled:
             return
+        user = self.user_map[member.name]
         is_admin = await self.is_factorio_admin(member)
         before_channel = before.channel and before.channel.name or None
         after_channel = after.channel and after.channel.name or None
+
         if before_channel and before_channel in FACTORIO_VOICE_CHANNELS:
             if after_channel and after_channel in FACTORIO_VOICE_CHANNELS:
-                print(f"{self.user_map[member.name]} сменил голосовой канал с {before_channel} на {after_channel}")
+                print(f"{user} сменил голосовой канал с {before_channel} на {after_channel}")
             else:
-                if not is_admin:
-                    print(f"/kick {user_map[member.name]} Покинул голосовой канал {before_channel}")
-                    await self.remove_user_from_whitelist(self.user_map[member.name])
-                    await self.execute_rcon(f"/kick {self.user_map[member.name]} Покинул голосовой канал {before_channel}")
+                if is_admin:
+                    return
+                await self.remove_user_from_whitelist(user)
+                await self.execute_rcon(f"/kick {user} Покинул голосовой канал {before_channel}")
+
         if after_channel and after_channel in FACTORIO_VOICE_CHANNELS:
-            await self.add_user_to_whitelist(self.user_map[member.name])
+            await self.add_user_to_whitelist(user)
