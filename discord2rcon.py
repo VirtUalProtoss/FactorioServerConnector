@@ -133,7 +133,7 @@ class DClient(discord.Client):
                 await message.channel.send(f"Factorio user name must be min 2 and max 30 letters!")
                 return
 
-            allowed = set(string.ascii_lowercase + string.ascii_uppercase + string.digits + '.' + '-')
+            allowed = set(string.ascii_lowercase + string.ascii_uppercase + string.digits + '.' + '-' + '_')
             if not set(message.content) <= allowed:
                 await message.channel.send(
                     f"Factorio user name must include only alphabetical characters, numbers and .- but provide {message.content}")
