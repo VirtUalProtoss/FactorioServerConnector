@@ -1,5 +1,6 @@
 import os
 import json
+import string
 import discord
 import asyncio
 import factorio_rcon
@@ -128,9 +129,16 @@ class DClient(discord.Client):
 
         # код для маппинга юзера дискорда с юзером в факторио
         else:
-            if len(message.content) > 30:
-                await message.channel.send(f"Factorio user name must be max 30 letters!")
+            if len(message.content) < 2 or len(message.content) > 30:
+                await message.channel.send(f"Factorio user name must be min 2 and max 30 letters!")
                 return
+
+            allowed = set(string.ascii_lowercase + string.ascii_uppercase + string.digits + '.' + '-')
+            if not set(message.content) <= allowed:
+                await message.channel.send(
+                    f"Factorio user name must include only alphabetical characters, numbers and .- but provide {message.content}")
+                return
+
             user_exists = ""
             for user in self.user_map:
                 if self.user_map[user] == message.content:
