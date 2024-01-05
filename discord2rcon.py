@@ -27,18 +27,38 @@ class DClient(discord.Client):
     bot_enabled = True
     whitelist_polling_interval = WHITELIST_POLLING_INTERVAL
 
+    async def mass_kick_players(self):
+        players_to_kick = await self.get_players_to_kick()
+        for user in players_to_kick:
+            await self.execute_rcon(f"/kick {user} Не в белом списке")
+
+    async def get_players_to_kick(self):
+        await self.update_bot_whitelist()
+        result = (await self.execute_rcon(f"/players o")).replace(" (online)", "")
+        online_players = [o.strip() for o in result.split("\n")[1:]]
+        players_to_kick = [ o for o in online_players if o not in self.white_list]
+        return players_to_kick
+
     async def add_user_to_whitelist(self, username):
-        self.white_list.append(username)
+        if username not in self.white_list:
+            self.white_list.append(username)
         await self.execute_rcon(f"/whitelist add {username}")
 
     async def remove_user_from_whitelist(self, username):
-        self.white_list.remove(username)
+        if username in self.white_list:
+            self.white_list.remove(username)
         await self.execute_rcon(f"/whitelist remove {username}")
 
     async def update_server_whitelist(self):
         await self.execute_rcon("/whitelist clear")
         for username in self.white_list:
             await self.execute_rcon(f"/whitelist add {username}")
+
+    async def update_bot_whitelist(self):
+        whitelist = (await self.execute_rcon("/whitelist get")).replace("Whitelisted players: ", "")
+        parts = whitelist.split(" and ")
+        game_whitelisted_players = parts[0].split(", ") + [parts[1]]
+        self.white_list = game_whitelisted_players
 
     async def is_factorio_admin(self, member):
         is_admin = False
@@ -53,23 +73,16 @@ class DClient(discord.Client):
     async def get_whitelist_enabled(self):
         await asyncio.sleep(self.whitelist_polling_interval)
         data = await self.execute_rcon("/wlist-state")
-        print(f"get_whitelist_enabled: {data}")
-        if bool(data):
-            await self.execute_rcon(f"/whitelist enable")
+        if bool(int(data)):
+            if not self.white_list_enabled:
+                self.white_list_enabled = True
+                await self.execute_rcon(f"/whitelist enable")
+                await self.mass_kick_players()
         else:
-            await self.execute_rcon(f"/whitelist disable")
+            if self.white_list_enabled:
+                self.white_list_enabled = False
+                await self.execute_rcon(f"/whitelist disable")
         self.loop.create_task(self.get_whitelist_enabled())
-
-    # пока закомментил, но вдруг понадобится
-    # async def get_bot_enabled(self):
-    #     await asyncio.sleep(self.whitelist_polling_interval)
-    #     data = await self.execute_rcon("/bot-state")
-    #     print(f"get_bot_enabled: {data}")
-    #     if data == "on":
-    #         self.bot_enabled = True
-    #     else:
-    #         self.bot_enabled = False
-    #     self.loop.create_task(self.get_bot_enabled())
 
     async def execute_rcon(self, command, retry=3):
         try:
@@ -86,7 +99,6 @@ class DClient(discord.Client):
         self.rcon_client = factorio_rcon.RCONClient(RCON_ADDR, int(RCON_PORT), RCON_PASS)
         self.user_map = load_data(USER_MAP_FILE)
         self.loop.create_task(self.get_whitelist_enabled())
-        # self.loop.create_task(self.get_bot_enabled())
         print(f'We have logged in as {self.user}')
 
     async def on_message(self, message):
@@ -121,11 +133,14 @@ class DClient(discord.Client):
                         await message.channel.send(f"Bad value {message.content}")
 
             if cmd == "whitelist":
-                self.whitelist = await self.execute_rcon("/whitelist get")
-                await message.channel.send(self.whitelist)
+                await self.update_bot_whitelist()
+                await message.channel.send(self.white_list)
 
             if cmd == "user_map":
                 await message.channel.send(self.user_map)
+
+            if cmd == "players_to_kick":
+                await message.channel.send(await self.get_players_to_kick())
 
         # код для маппинга юзера дискорда с юзером в факторио
         else:
@@ -169,7 +184,12 @@ class DClient(discord.Client):
                 if is_admin:
                     return
                 await self.remove_user_from_whitelist(user)
-                await self.execute_rcon(f"/kick {user} Покинул голосовой канал {before_channel}")
+                print(f"self.white_list_enabled: {self.white_list_enabled}")
+                if self.white_list_enabled:
+                    await self.execute_rcon(f"/kick {user} Покинул голосовой канал {before_channel}")
 
         if after_channel and after_channel in FACTORIO_VOICE_CHANNELS:
             await self.add_user_to_whitelist(user)
+
+    async def on_member_update(self, before, after):
+        print(before.roles, after.roles)
