@@ -29,6 +29,16 @@ class DClient(discord.Client):
 
     async def mass_kick_players(self):
         players_to_kick = await self.get_players_to_kick()
+        if len(players_to_kick) == 0:
+            return
+        str_players_to_kick = ", ".join(players_to_kick)
+        await self.execute_rcon(
+            f"! Игроки {str_players_to_kick},"
+            f" в течении {KICK_WAIT_INTERVAL} секунд зайдите в любой из "
+            f"{FACTORIO_VOICE_CHANNELS} в Discord-е, или будете кикнуты с сервера"
+        )
+        await asyncio.sleep(KICK_WAIT_INTERVAL)
+        players_to_kick = await self.get_players_to_kick()
         for user in players_to_kick:
             await self.execute_rcon(f"/kick {user} Не в белом списке")
 
@@ -36,7 +46,9 @@ class DClient(discord.Client):
         await self.update_bot_whitelist()
         result = (await self.execute_rcon(f"/players o")).replace(" (online)", "")
         online_players = [o.strip() for o in result.split("\n")[1:]]
-        players_to_kick = [ o for o in online_players if o not in self.white_list]
+        admins = await self.get_factorio_admins()
+        players_to_kick = [ o for o in online_players if o not in self.white_list or o not in admins]
+        # players_to_kick = [ o for o in online_players if o not in self.white_list]
         return players_to_kick
 
     async def add_user_to_whitelist(self, username):
@@ -55,14 +67,30 @@ class DClient(discord.Client):
             await self.execute_rcon(f"/whitelist add {username}")
 
     async def update_bot_whitelist(self):
-        whitelist = (await self.execute_rcon("/whitelist get")).replace("Whitelisted players: ", "")
-        parts = whitelist.split(" and ")
-        game_whitelisted_players = parts[0].split(", ") + [parts[1]]
-        self.white_list = game_whitelisted_players
+        result = await self.execute_rcon("/whitelist get")
+        if result == "The whitelist is empty.":
+            self.white_list = []
+        else:
+            whitelist = result.replace("Whitelisted players: ", "")
+            if " and " in whitelist:
+                parts = whitelist.split(" and ")
+                game_whitelisted_players = parts[0].split(", ") + [parts[1]]
+            else:
+                game_whitelisted_players = [whitelist]
+            self.white_list = game_whitelisted_players
+        admins = await self.get_factorio_admins()
+        for admin in admins:
+            if admin not in self.white_list:
+                self.white_list.append(admin)
 
-    async def is_factorio_admin(self, member):
+    async def get_factorio_admins(self):
+        admins = [u.strip().replace(" (online)", "") for u in (await self.execute_rcon("/admins")).split("\n")]
+        return admins
+
+    async def is_factorio_admin(self, member, check_roles=[]):
         is_admin = False
-        for role in member.roles:
+        roles = check_roles or member.roles
+        for role in roles:
             if role.name == FACTORIO_ADMIN_ROLE:
                 is_admin = True
         return is_admin
@@ -101,9 +129,13 @@ class DClient(discord.Client):
         self.loop.create_task(self.get_whitelist_enabled())
         print(f'We have logged in as {self.user}')
 
+    # async def on_reaction_add(self, reaction, user):
+    #     print(f"reaction: {reaction}, {reaction.emoji}")
+
     async def on_message(self, message):
         is_admin = await self.is_factorio_admin(message.author)
         author = message.author.name
+        # print(message.channel.name, author, message.content)
         if message.channel.name != DISCORD_MAP_CHANNEL:
             return
 
@@ -136,6 +168,10 @@ class DClient(discord.Client):
                 await self.update_bot_whitelist()
                 await message.channel.send(self.white_list)
 
+            if cmd == "update_server_whitelist" and is_admin:
+                await self.update_server_whitelist()
+                await message.channel.send(f"Updated server whitelist to: {self.white_list}")
+
             if cmd == "user_map":
                 await message.channel.send(self.user_map)
 
@@ -159,18 +195,22 @@ class DClient(discord.Client):
                 if self.user_map[user] == message.content:
                     user_exists = user
             if user_exists:
+                await message.add_reaction("❌")
                 await message.channel.send(
-                    f"Factorio user {message.content} already mapped to Discord user {user_exists}")
+                    f"Игрок {message.content} уже привязан к пользователю {user_exists}")
             else:
                 self.user_map.update({
                     author: message.content
                 })
                 with open(USER_MAP_FILE, "w") as ufile:
                     ufile.write(json.dumps(self.user_map))
-                await message.channel.send(f"Discord User {author} mapped to {message.content}")
+                # await message.channel.send(f"Discord User {author} mapped to {message.content}")
+                await message.add_reaction("✅")
 
     async def on_voice_state_update(self, member, before, after):
         if not self.bot_enabled:
+            return
+        if not member.name in self.user_map:
             return
         user = self.user_map[member.name]
         is_admin = await self.is_factorio_admin(member)
@@ -192,4 +232,24 @@ class DClient(discord.Client):
             await self.add_user_to_whitelist(user)
 
     async def on_member_update(self, before, after):
-        print(before.roles, after.roles)
+        # print("before:", before.name, "=>", ", ".join([r.name for r in before.roles]))
+        # print("after:", after.name, "=>", ", ".join([r.name for r in after.roles]))
+        if not after.name in self.user_map:
+            print(not after.name in self.user_map)
+            return
+        admins = await self.get_factorio_admins()
+        # print(f"admins: {admins}")
+        factorio_name = self.user_map[after.name]
+        # print(f"factorio_name: {factorio_name}")
+        is_admin = await self.is_factorio_admin(after)
+        # print(f"is_admin: {is_admin}")
+        if is_admin:
+            if factorio_name not in admins:
+                # print(f"/promote {factorio_name}")
+                result = await self.execute_rcon(f"/promote {factorio_name}")
+                # print(result)
+        else:
+            if factorio_name in admins:
+                # print(f"/demote {factorio_name}")
+                result = await self.execute_rcon(f"/demote {factorio_name}")
+                # print(result)
